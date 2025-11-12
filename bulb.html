@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Pull-String Light Bulb</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            transition: background-color 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            /* Prevent selection/highlighting while dragging */
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none; /* Crucial for mobile drag */
+        }
+
+        /* State: OFF */
+        body.light-off {
+            background-color: #262626;
+            color: #555;
+        }
+
+        /* State: ON */
+        body.light-on {
+            background-color: #EBE4C5; /* Matches the beige in your image */
+            color: #8C8C8C;
+        }
+
+        #app {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start; /* Hang from top */
+            padding-top: 10vh;
+        }
+
+        /* The Bulb SVG Container */
+        .bulb-container {
+            position: relative;
+            z-index: 10;
+            filter: drop-shadow(0px 10px 20px rgba(0,0,0,0.1));
+            transition: filter 0.3s;
+        }
+
+        body.light-on .bulb-container {
+            /* Glow effect when on */
+            filter: drop-shadow(0px 0px 60px rgba(255, 245, 100, 0.6));
+        }
+
+        /* The Glass Bulb Part */
+        .bulb-glass {
+            fill: #5a5a5a;
+            stroke: #333;
+            stroke-width: 3;
+            transition: fill 0.4s ease-out;
+        }
+
+        body.light-on .bulb-glass {
+            fill: #FDFD96; /* Bright yellow/white */
+            stroke: #E0E050;
+        }
+
+        /* The Metal Base */
+        .bulb-base {
+            fill: #8c8c8c;
+            stroke: #333;
+            stroke-width: 3;
+        }
+
+        /* Filament (faintly visible when off, bright when on) */
+        .filament {
+            stroke: #444;
+            stroke-width: 2;
+            fill: none;
+            opacity: 0.5;
+            transition: opacity 0.3s, stroke 0.3s;
+        }
+        
+        body.light-on .filament {
+            stroke: #fff;
+            opacity: 0.9;
+            filter: drop-shadow(0 0 2px #fff);
+        }
+
+        /* Physics Canvas for the string */
+        #string-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: all; /* Allow grabbing anywhere near the string ideally, but we focus on handle */
+            z-index: 5; 
+        }
+        
+        /* Interactive Hint */
+        .hint {
+            position: absolute;
+            bottom: 10%;
+            text-align: center;
+            width: 100%;
+            font-size: 0.9rem;
+            opacity: 0.6;
+            pointer-events: none;
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        /* Cursor handling */
+        .grab-cursor {
+            cursor: grab;
+        }
+        .grabbing-cursor {
+            cursor: grabbing;
+        }
+
+    </style>
+</head>
+<body class="light-off" id="main-body">
+
+    <div id="app">
+        
+       
+        <canvas id="string-canvas"></canvas>
+
+        
+        <div class="bulb-container" id="bulb-wrapper">
+            <svg width="120" height="180" viewBox="0 0 120 180" xmlns="http://www.w3.org/2000/svg">
+               
+                <path d="M40,110 L80,110 L75,130 L45,130 Z" fill="#777" stroke="#333" stroke-width="3" stroke-linejoin="round"/>
+                <rect x="45" y="130" width="30" height="15" rx="4" fill="#555" stroke="#333" stroke-width="3"/>
+                
+                
+                <path class="bulb-glass" d="M60,10 
+                         C25,10 10,40 10,70 
+                         C10,95 30,105 40,110 
+                         L80,110 
+                         C90,105 110,95 110,70 
+                         C110,40 95,10 60,10 Z" stroke-linejoin="round"/>
+
+                
+                <path class="filament" d="M45,110 L45,80 L55,60 L65,80 L75,60 L75,110" stroke-linecap="round" stroke-linejoin="round"/>
+                
+              
+                <path d="M25,35 Q40,20 60,20" stroke="rgba(255,255,255,0.4)" stroke-width="4" fill="none" stroke-linecap="round"/>
+            </svg>
+        </div>
+        
+        <div class="hint text-gray-400 dark:text-gray-500">
+            Pull the string to toggle
+        </div>
+    </div>
+
+    <script>
+       
+        const canvas = document.getElementById('string-canvas');
+        const ctx = canvas.getContext('2d');
+        const bulbWrapper = document.getElementById('bulb-wrapper');
+        const body = document.getElementById('main-body');
+        
+        
+        let isLightOn = false;
+        let isDragging = false;
+        let dragStartY = 0;
+
+       
+        let originX = 0;
+        let originY = 0;
+        
+       
+        let handlePos = { x: 0, y: 0 };
+        let handleVelocity = { x: 0, y: 0 };
+        
+        
+        const restLength = 180; 
+        const stringStiffness = 0.1; 
+        const stringDamping = 0.85; 
+        const handleMass = 20; 
+        const clickThreshold = 50; 
+
+        
+        let synth;
+        let audioStarted = false;
+
+        async function initAudio() {
+            if (audioStarted) return;
+            await Tone.start();
+           
+            synth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: "square" },
+                envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 }
+            }).toDestination();
+            synth.volume.value = -10;
+            audioStarted = true;
+        }
+
+        function playSwitchSound(on) {
+            if (!audioStarted) return;
+            if (on) {
+                
+                synth.triggerAttackRelease(["C5", "E5"], "32n");
+            } else {
+               
+                synth.triggerAttackRelease(["G4", "B4"], "32n");
+            }
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+          
+            const rect = bulbWrapper.getBoundingClientRect();
+            originX = rect.left + rect.width / 2;
+           
+            originY = rect.top + 150; 
+
+          
+            if (!isDragging) {
+                handlePos.x = originX;
+                handlePos.y = originY + restLength;
+            }
+        }
+
+        function toggleLight() {
+            isLightOn = !isLightOn;
+            
+          
+            if (isLightOn) {
+                body.classList.remove('light-off');
+                body.classList.add('light-on');
+            } else {
+                body.classList.remove('light-on');
+                body.classList.add('light-off');
+            }
+
+            playSwitchSound(isLightOn);
+        }
+
+       
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (isDragging) {
+              
+            } else {
+                
+                const dx = handlePos.x - originX;
+                const dy = handlePos.y - (originY + restLength);
+                
+                const forceX = -stringStiffness * dx;
+                const forceY = -stringStiffness * dy;
+
+               
+                handleVelocity.x += forceX;
+                handleVelocity.y += forceY;
+
+                
+                handleVelocity.x *= stringDamping;
+                handleVelocity.y *= stringDamping;
+
+                
+                handlePos.x += handleVelocity.x;
+                handlePos.y += handleVelocity.y;
+            }
+
+            
+            ctx.beginPath();
+            ctx.moveTo(originX, originY);
+            
+         
+            ctx.lineTo(handlePos.x, handlePos.y);
+            
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = isLightOn ? '#555' : '#888';
+            ctx.stroke();
+
+           
+            ctx.beginPath();
+            ctx.arc(handlePos.x, handlePos.y, 10, 0, Math.PI * 2);
+            ctx.fillStyle = isLightOn ? '#d15c5c' : '#e0e0e0'; 
+            ctx.fill();
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            requestAnimationFrame(animate);
+        }
+
+       
+        function getPointerPos(e) {
+            if (e.touches) {
+                return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+            return { x: e.clientX, y: e.clientY };
+        }
+
+        function isOverHandle(x, y) {
+            const dx = x - handlePos.x;
+            const dy = y - handlePos.y;
+            
+            return Math.sqrt(dx*dx + dy*dy) < 40;
+        }
+
+        function onStart(e) {
+            const pos = getPointerPos(e);
+            if (isOverHandle(pos.x, pos.y)) {
+              
+                initAudio();
+                
+                isDragging = true;
+                dragStartY = pos.y;
+                document.body.classList.add('grabbing-cursor');
+                
+               
+                handleVelocity = { x: 0, y: 0 };
+            }
+        }
+
+        function onMove(e) {
+            if (!isDragging) {
+                const pos = getPointerPos(e);
+                if(isOverHandle(pos.x, pos.y)){
+                    document.body.classList.add('grab-cursor');
+                } else {
+                    document.body.classList.remove('grab-cursor');
+                }
+                return;
+            }
+
+            const pos = getPointerPos(e);
+            
+            
+            handlePos.x = pos.x; 
+            
+            
+            const minY = originY + restLength - 20;
+            const maxY = originY + restLength + 150; 
+            
+            handlePos.y = Math.max(minY, Math.min(maxY, pos.y));
+        }
+
+        function onEnd(e) {
+            if (!isDragging) return;
+            
+            isDragging = false;
+            document.body.classList.remove('grabbing-cursor');
+
+            
+            const currentDist = handlePos.y - (originY + restLength);
+            if (currentDist > clickThreshold) {
+                toggleLight();
+                
+                handleVelocity.y = -15; 
+            }
+
+            
+        }
+
+       
+        window.addEventListener('resize', resize);
+        
+        
+        window.addEventListener('mousedown', onStart);
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onEnd);
+        
+       
+        window.addEventListener('touchstart', (e) => { 
+           
+            const pos = getPointerPos(e);
+            if(isOverHandle(pos.x, pos.y)) e.preventDefault();
+            onStart(e); 
+        }, {passive: false});
+        
+        window.addEventListener('touchmove', (e) => {
+             if(isDragging) e.preventDefault(); 
+             onMove(e); 
+        }, {passive: false});
+        
+        window.addEventListener('touchend', onEnd);
+
+        
+        resize();
+        animate();
+
+    </script>
+</body>
+</html>
