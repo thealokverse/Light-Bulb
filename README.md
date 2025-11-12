@@ -16,5 +16,3 @@ Vector Graphics: The bulb is a crisp SVG, so it looks great at any size.
 
 Mobile Friendly: Works on both desktop (mouse) and mobile (touch).
 
-
-## [Live Here](https://thealokverse.github.io/Light-Bulb/)
